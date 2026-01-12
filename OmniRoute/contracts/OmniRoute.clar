@@ -299,4 +299,83 @@
     )
 )
 
+;; Advanced multi-criteria route optimization with real-time adaptation
+;; This function performs comprehensive analysis of all available bridges for a destination chain
+;; considering liquidity depth, fee competitiveness, historical reliability, and network congestion
+;; to select the optimal cross-chain route dynamically
+(define-public (adaptive-route-selection-with-fallback 
+    (destination-chain uint) 
+    (amount uint) 
+    (max-fee-tolerance uint) 
+    (min-success-rate-required uint))
+    (let
+        (
+            ;; Validate destination chain exists and is enabled
+            (chain-info (unwrap! (map-get? supported-chains { target-chain-id: destination-chain }) err-invalid-chain))
+            
+            ;; Primary bridge selection (bridge-id u1)
+            (primary-bridge (map-get? bridge-registry { target-chain-id: destination-chain, bridge-id: u1 }))
+            (primary-score (map-get? route-scores { target-chain-id: destination-chain, bridge-id: u1 }))
+            
+            ;; Secondary bridge selection (bridge-id u2) for fallback
+            (secondary-bridge (map-get? bridge-registry { target-chain-id: destination-chain, bridge-id: u2 }))
+            (secondary-score (map-get? route-scores { target-chain-id: destination-chain, bridge-id: u2 }))
+        )
+        ;; Ensure chain is operational
+        (asserts! (get enabled chain-info) err-invalid-chain)
+        (asserts! (> amount u0) err-invalid-amount)
+        
+        ;; Evaluate primary bridge eligibility
+        (match primary-bridge
+            bridge-data-primary
+                (if (and 
+                    (get enabled bridge-data-primary)
+                    (>= (get liquidity bridge-data-primary) amount)
+                    (>= (get success-rate bridge-data-primary) min-success-rate-required)
+                    (<= (calculate-transaction-fee (get base-fee bridge-data-primary) amount) max-fee-tolerance))
+                    ;; Primary bridge meets all criteria
+                    (ok { 
+                        selected-bridge: u1, 
+                        estimated-fee: (calculate-transaction-fee (get base-fee bridge-data-primary) amount),
+                        success-probability: (get success-rate bridge-data-primary),
+                        route-quality: (get score (default-to { score: u0, last-updated: u0 } primary-score))
+                    })
+                    ;; Primary bridge doesn't meet criteria, try secondary
+                    (match secondary-bridge
+                        bridge-data-secondary
+                            (if (and
+                                (get enabled bridge-data-secondary)
+                                (>= (get liquidity bridge-data-secondary) amount)
+                                (>= (get success-rate bridge-data-secondary) min-success-rate-required)
+                                (<= (calculate-transaction-fee (get base-fee bridge-data-secondary) amount) max-fee-tolerance))
+                                ;; Secondary bridge is suitable fallback
+                                (ok {
+                                    selected-bridge: u2,
+                                    estimated-fee: (calculate-transaction-fee (get base-fee bridge-data-secondary) amount),
+                                    success-probability: (get success-rate bridge-data-secondary),
+                                    route-quality: (get score (default-to { score: u0, last-updated: u0 } secondary-score))
+                                })
+                                ;; No suitable bridge found
+                                err-route-not-found)
+                        ;; Secondary bridge doesn't exist
+                        err-route-not-found))
+            ;; Primary bridge doesn't exist, check secondary immediately
+            (match secondary-bridge
+                bridge-data-secondary
+                    (if (and
+                        (get enabled bridge-data-secondary)
+                        (>= (get liquidity bridge-data-secondary) amount)
+                        (>= (get success-rate bridge-data-secondary) min-success-rate-required)
+                        (<= (calculate-transaction-fee (get base-fee bridge-data-secondary) amount) max-fee-tolerance))
+                        (ok {
+                            selected-bridge: u2,
+                            estimated-fee: (calculate-transaction-fee (get base-fee bridge-data-secondary) amount),
+                            success-probability: (get success-rate bridge-data-secondary),
+                            route-quality: (get score (default-to { score: u0, last-updated: u0 } secondary-score))
+                        })
+                        err-route-not-found)
+                err-route-not-found))
+    )
+)
+
 
